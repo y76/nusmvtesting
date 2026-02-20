@@ -1,0 +1,31 @@
+MODULE main
+VAR
+  mode : {"M", "U"};
+  pmp_locked : boolean;
+  init_complete : boolean;
+
+ASSIGN
+  init(mode) := "M";
+  init(pmp_locked) := FALSE;
+  init(init_complete) := FALSE;
+
+  next(pmp_locked) := case
+    mode = "M" & !pmp_locked : {FALSE, TRUE}; 
+    TRUE : pmp_locked;
+  esac;
+  
+  next(init_complete) := case
+    mode = "M" & pmp_locked & !init_complete : TRUE;
+    TRUE : init_complete;
+  esac;
+  
+  next(mode) := case
+    mode = "M" & init_complete : "U";
+    TRUE : mode;
+  esac;
+
+--pmp must be locked before init complete
+LTLSPEC G(init_complete -> pmp_locked)
+
+--Never in U-mode without completed init
+LTLSPEC G(mode = "U" -> init_complete)
