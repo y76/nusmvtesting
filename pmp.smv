@@ -1,31 +1,51 @@
 MODULE main
 VAR
+  boot_state : {"RESET", "PMP_SETUP", "TRAP_SETUP", "DROP_PRIVILEGES", "BOOT_COMPLETE"};
   mode : {"M", "U"};
   pmp_locked : boolean;
-  init_complete : boolean;
+  failure : boolean;
 
 ASSIGN
+  init(boot_state) := "RESET";
   init(mode) := "M";
   init(pmp_locked) := FALSE;
-  init(init_complete) := FALSE;
+  init(failure) := FALSE;
+
+  next(failure) := case
+    boot_state = "RESET" : FALSE; 
+    boot_state = "BOOT_COMPLETE" : FALSE;  
+    TRUE : {TRUE, FALSE};  
+  esac;
+
+  next(boot_state) := case
+    failure : "RESET"; 
+    boot_state = "RESET" : "PMP_SETUP";
+    boot_state = "PMP_SETUP" : "TRAP_SETUP"; 
+    boot_state = "TRAP_SETUP" : "DROP_PRIVILEGES";
+    boot_state = "DROP_PRIVILEGES" : "BOOT_COMPLETE";
+    TRUE : boot_state;
+  esac;
 
   next(pmp_locked) := case
-    mode = "M" & !pmp_locked : {FALSE, TRUE}; 
+    failure : FALSE;  
+    boot_state = "PMP_SETUP" : TRUE;  
     TRUE : pmp_locked;
   esac;
-  
-  next(init_complete) := case
-    mode = "M" & pmp_locked & !init_complete : TRUE;
-    TRUE : init_complete;
-  esac;
-  
+    
   next(mode) := case
-    mode = "M" & init_complete : "U";
+    failure : "M";
+    boot_state = "DROP_PRIVILEGES" : "U";
     TRUE : mode;
   esac;
 
---pmp must be locked before init complete
-LTLSPEC G(init_complete -> pmp_locked)
+-- if we are ever in u mode the PMP must have been locked already
+LTLSPEC G(mode = "U" -> pmp_locked)
 
---Never in U-mode without completed init
-LTLSPEC G(mode = "U" -> init_complete)
+-- if boot is done, then pmp is locked
+LTLSPEC G(boot_state = "BOOT_COMPLETE" -> pmp_locked)
+
+-- once boot complete, pmp stay locked until we reset OR pmp stays locked forever
+LTLSPEC G( boot_state = "BOOT_COMPLETE" -> ( (pmp_locked U (boot_state = "RESET")) | G pmp_locked ) )
+
+-- boot will complete eventually if failure comes to an end
+LTLSPEC (F G !failure) -> F (boot_state = "BOOT_COMPLETE")
