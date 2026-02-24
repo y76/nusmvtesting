@@ -3,22 +3,40 @@ VAR
   boot_state : {"RESET", "PMP_SETUP", "TRAP_SETUP", "DROP_PRIVILEGES", "BOOT_COMPLETE"};
   mode : {"M", "U"};
   pmp_locked : boolean;
-  failure : boolean;
+  boot_failure : boolean;
+
+  --interrupt logic
+  interrupt : boolean;
+  interrupt_enabled : boolean;
+  mpp : {"M", "U"};
+  mret_executed : boolean;
 
 ASSIGN
   init(boot_state) := "RESET";
   init(mode) := "M";
   init(pmp_locked) := FALSE;
-  init(failure) := FALSE;
+  init(boot_failure) := FALSE;
 
-  next(failure) := case
+  init(interrupt) := FALSE;
+  init(interrupt_enabled) := FALSE;  
+  init(mpp) := "U";
+  init(mret_executed) := FALSE;
+
+  next(mret_executed) := case
+    boot_failure : FALSE;
+    mode = "M" & boot_state = "BOOT_COMPLETE": {TRUE, FALSE};  
+    mode = "M" & boot_state = "DROP_PRIVILEGES": TRUE; 
+    TRUE : FALSE;
+  esac;
+
+  next(boot_failure) := case
     boot_state = "RESET" : FALSE; 
-    boot_state = "BOOT_COMPLETE" : FALSE;  
+    boot_state = "BOOT_COMPLETE" : FALSE; 
     TRUE : {TRUE, FALSE};  
   esac;
 
   next(boot_state) := case
-    failure : "RESET"; 
+    boot_failure : "RESET"; 
     boot_state = "RESET" : "PMP_SETUP";
     boot_state = "PMP_SETUP" : "TRAP_SETUP"; 
     boot_state = "TRAP_SETUP" : "DROP_PRIVILEGES";
@@ -27,16 +45,45 @@ ASSIGN
   esac;
 
   next(pmp_locked) := case
-    failure : FALSE;  
+    boot_failure : FALSE;  
     boot_state = "PMP_SETUP" : TRUE;  
     TRUE : pmp_locked;
   esac;
     
   next(mode) := case
-    failure : "M";
-    boot_state = "DROP_PRIVILEGES" : "U";
+    boot_failure : "M";
+    -- boot_state = "DROP_PRIVILEGES" : "U";
+    mode = "M" & mret_executed : mpp;  
+    mode = "U" & interrupt & interrupt_enabled : "M";
     TRUE : mode;
   esac;
+
+  next(interrupt_enabled) := case
+    boot_failure : FALSE;
+    mode = "U" & interrupt & interrupt_enabled: FALSE;
+    boot_state = "BOOT_COMPLETE" & mode = "U": TRUE; 
+    TRUE: interrupt_enabled;
+  esac; 
+
+  next(mpp) := case
+    boot_failure: "U";
+    boot_state = "DROP_PRIVILEGES" : "U";
+    mode = "U" & interrupt & interrupt_enabled : "U";
+    mode = "M" & interrupt & interrupt_enabled : "M";
+    TRUE : mpp;
+  esac;
+
+  next(interrupt) := case
+    boot_failure : FALSE;
+    boot_state != "BOOT_COMPLETE" : FALSE;
+    !interrupt_enabled: FALSE;
+    mode = "U" & interrupt & interrupt_enabled : FALSE; 
+    TRUE : {TRUE, FALSE};
+  esac;
+
+
+
+FAIRNESS (mode = "M" & boot_state = "BOOT_COMPLETE" & mret_executed); -- eventually m mode will drop down to u mode if we have finished booting (e.g., after interrupt finished)
 
 -- if we are ever in u mode the PMP must have been locked already
 LTLSPEC G(mode = "U" -> pmp_locked)
@@ -48,4 +95,30 @@ LTLSPEC G(boot_state = "BOOT_COMPLETE" -> pmp_locked)
 LTLSPEC G( boot_state = "BOOT_COMPLETE" -> ( (pmp_locked U (boot_state = "RESET")) | G pmp_locked ) )
 
 -- boot will complete eventually if failure comes to an end
-LTLSPEC (F G !failure) -> F (boot_state = "BOOT_COMPLETE")
+LTLSPEC (F G !boot_failure) -> F (boot_state = "BOOT_COMPLETE")
+
+LTLSPEC G(interrupt_enabled -> (boot_state = "BOOT_COMPLETE" & mode = "U"))
+
+LTLSPEC G(!interrupt_enabled -> !interrupt)
+
+LTLSPEC G(interrupt -> boot_state = "BOOT_COMPLETE")
+
+LTLSPEC G((mode = "U" & interrupt & interrupt_enabled) -> X(!interrupt_enabled))
+
+
+LTLSPEC G(boot_state = "PMP_SETUP" -> X(pmp_locked | boot_failure))
+LTLSPEC G(boot_state = "RESET" -> mode = "M")
+
+LTLSPEC G(mode = "M" & mret_executed & !boot_failure -> X(mode = mpp))
+LTLSPEC G((mode = "U" & interrupt) -> X(mode = "M" | boot_failure))
+LTLSPEC G(mode = "M" & !mret_executed -> X(mode = "M" | boot_failure))
+
+LTLSPEC G((mode = "U" & interrupt & interrupt_enabled) -> X(mpp = "U"))
+LTLSPEC G((mode = "M" & interrupt & interrupt_enabled) -> X(mpp = "M"))
+LTLSPEC G(boot_state != "BOOT_COMPLETE" -> !interrupt)
+LTLSPEC G(mode = "M" -> !interrupt_enabled)
+LTLSPEC G(interrupt_enabled -> (mode = "U" & boot_state = "BOOT_COMPLETE"))
+LTLSPEC G(mode = "M" & boot_state = "BOOT_COMPLETE" -> F(mode = "U" | boot_failure))
+LTLSPEC (F G !boot_failure) -> (G F mode = "U")
+LTLSPEC G(pmp_locked & !boot_failure -> X(pmp_locked | boot_failure))
+LTLSPEC G(!pmp_locked -> mode = "M")
