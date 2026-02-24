@@ -9,7 +9,16 @@ VAR
   interrupt : boolean;
   interrupt_enabled : boolean;
   mpp : {"M", "U"};
-  mret_executed : boolean;
+
+  --handler stuff
+  in_handler : boolean;
+  handler_ctr : 0..3;
+
+
+DEFINE
+  boot_mret := (mode="M" & boot_state="DROP_PRIVILEGES");
+  do_mret_runtime := (boot_state="BOOT_COMPLETE" & mode="M" & handler_ctr = 0 & in_handler);
+  do_mret := boot_mret | do_mret_runtime;
 
 ASSIGN
   init(boot_state) := "RESET";
@@ -20,13 +29,24 @@ ASSIGN
   init(interrupt) := FALSE;
   init(interrupt_enabled) := FALSE;  
   init(mpp) := "U";
-  init(mret_executed) := FALSE;
+  
+  init(in_handler) := FALSE;
+  init(handler_ctr) := 0;
 
-  next(mret_executed) := case
+  next(handler_ctr) := case
+    boot_failure : 0;
+    (boot_state = "BOOT_COMPLETE" & mode="U" & interrupt & interrupt_enabled) : 3;
+    (boot_state = "BOOT_COMPLETE" & mode="M"  & in_handler & handler_ctr > 0) : handler_ctr - 1;
+
+    !in_handler : 0;
+    TRUE : handler_ctr;
+  esac;
+
+  next(in_handler) := case
     boot_failure : FALSE;
-    mode = "M" & boot_state = "BOOT_COMPLETE": {TRUE, FALSE};  
-    mode = "M" & boot_state = "DROP_PRIVILEGES": TRUE; 
-    TRUE : FALSE;
+    (mode="U" & interrupt & interrupt_enabled) : TRUE;
+    do_mret_runtime : FALSE;
+    TRUE : in_handler;
   esac;
 
   next(boot_failure) := case
@@ -52,9 +72,8 @@ ASSIGN
     
   next(mode) := case
     boot_failure : "M";
-    -- boot_state = "DROP_PRIVILEGES" : "U";
-    mode = "M" & mret_executed : mpp;  
-    mode = "U" & interrupt & interrupt_enabled : "M";
+    mode="U" & interrupt & interrupt_enabled : "M";             -- trap to M
+    mode="M" & do_mret : mpp;               -- return via mret
     TRUE : mode;
   esac;
 
@@ -69,7 +88,6 @@ ASSIGN
     boot_failure: "U";
     boot_state = "DROP_PRIVILEGES" : "U";
     mode = "U" & interrupt & interrupt_enabled : "U";
-    mode = "M" & interrupt & interrupt_enabled : "M";
     TRUE : mpp;
   esac;
 
@@ -82,8 +100,6 @@ ASSIGN
   esac;
 
 
-
-FAIRNESS (mode = "M" & boot_state = "BOOT_COMPLETE" & mret_executed); -- eventually m mode will drop down to u mode if we have finished booting (e.g., after interrupt finished)
 
 -- if we are ever in u mode the PMP must have been locked already
 LTLSPEC G(mode = "U" -> pmp_locked)
@@ -109,16 +125,21 @@ LTLSPEC G((mode = "U" & interrupt & interrupt_enabled) -> X(!interrupt_enabled))
 LTLSPEC G(boot_state = "PMP_SETUP" -> X(pmp_locked | boot_failure))
 LTLSPEC G(boot_state = "RESET" -> mode = "M")
 
-LTLSPEC G(mode = "M" & mret_executed & !boot_failure -> X(mode = mpp))
+LTLSPEC G(mode = "M" & do_mret & !boot_failure -> X(mode = mpp))
 LTLSPEC G((mode = "U" & interrupt) -> X(mode = "M" | boot_failure))
-LTLSPEC G(mode = "M" & !mret_executed -> X(mode = "M" | boot_failure))
-
+LTLSPEC G((mode="M" & !do_mret) -> X(mode="M" | boot_failure))
 LTLSPEC G((mode = "U" & interrupt & interrupt_enabled) -> X(mpp = "U"))
-LTLSPEC G((mode = "M" & interrupt & interrupt_enabled) -> X(mpp = "M"))
 LTLSPEC G(boot_state != "BOOT_COMPLETE" -> !interrupt)
 LTLSPEC G(mode = "M" -> !interrupt_enabled)
-LTLSPEC G(interrupt_enabled -> (mode = "U" & boot_state = "BOOT_COMPLETE"))
 LTLSPEC G(mode = "M" & boot_state = "BOOT_COMPLETE" -> F(mode = "U" | boot_failure))
 LTLSPEC (F G !boot_failure) -> (G F mode = "U")
 LTLSPEC G(pmp_locked & !boot_failure -> X(pmp_locked | boot_failure))
 LTLSPEC G(!pmp_locked -> mode = "M")
+LTLSPEC G(boot_state != "BOOT_COMPLETE" -> mode = "M")
+LTLSPEC G(in_handler -> mode = "M")
+LTLSPEC G((!in_handler & X(in_handler)) -> (mode = "U" & interrupt & interrupt_enabled))
+LTLSPEC G((in_handler & !do_mret) -> X(in_handler))
+LTLSPEC G((in_handler & X(!in_handler)) -> do_mret)
+LTLSPEC G(in_handler -> F(!in_handler | boot_failure))
+LTLSPEC G((handler_ctr > 0) -> in_handler)
+LTLSPEC G(in_handler -> F(!in_handler))
