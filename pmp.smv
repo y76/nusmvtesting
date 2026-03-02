@@ -14,12 +14,44 @@ VAR
   in_handler : boolean;
   handler_ctr : 0..3;
 
+  action : {
+  "NONE",
+  "EXEC_U_TEXT",
+  "READ_U_TEXT",
+  "WRITE_U_TEXT",
+
+  "EXEC_U_RODATA",
+  "READ_U_RODATA",
+  "WRITE_U_RODATA",
+
+  "EXEC_U_RAM",
+  "READ_U_RAM",
+  "WRITE_U_RAM",
+
+  "EXEC_M_TEXT",
+  "READ_M_TEXT",
+  "WRITE_M_TEXT",
+
+  "EXEC_M_RODATA",
+  "READ_M_RODATA",
+  "WRITE_M_RODATA",
+
+  "EXEC_M_RAM",
+  "READ_M_RAM",
+  "WRITE_M_RAM"};
 
 DEFINE
   boot_mret := (mode="M" & boot_state="DROP_PRIVILEGES");
   do_mret_runtime := (boot_state="BOOT_COMPLETE" & mode="M" & handler_ctr = 0 & in_handler);
   do_mret := boot_mret | do_mret_runtime;
-
+  u_allowed :=
+    (action = "NONE") |
+    (action = "EXEC_U_TEXT") |
+    (action = "READ_U_TEXT") |
+    (action = "READ_U_RODATA") |
+    (action = "READ_U_RAM") |
+    (action = "WRITE_U_RAM");
+    
 ASSIGN
   init(boot_state) := "RESET";
   init(mode) := "M";
@@ -32,7 +64,7 @@ ASSIGN
   
   init(in_handler) := FALSE;
   init(handler_ctr) := 0;
-
+  init(action) := "NONE";
   next(handler_ctr) := case
     boot_failure : 0;
     (boot_state = "BOOT_COMPLETE" & mode="U" & interrupt & interrupt_enabled) : 3;
@@ -42,6 +74,7 @@ ASSIGN
     TRUE : handler_ctr;
   esac;
 
+  next(action) := "NONE";
   next(in_handler) := case
     boot_failure : FALSE;
     (mode="U" & interrupt & interrupt_enabled) : TRUE;
@@ -143,3 +176,4 @@ LTLSPEC G((in_handler & X(!in_handler)) -> do_mret)
 LTLSPEC G(in_handler -> F(!in_handler | boot_failure))
 LTLSPEC G((handler_ctr > 0) -> in_handler)
 LTLSPEC G(in_handler -> F(!in_handler))
+LTLSPEC G(action = "NONE" -> X(action = "NONE"))
